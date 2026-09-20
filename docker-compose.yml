@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: mfarps-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fisherfolk
+      POSTGRES_PASSWORD: fisherfolk
+      POSTGRES_DB: mfarps
+    ports:
+      - "5437:5432"
+    volumes:
+      - mfarps_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fisherfolk -d mfarps"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mfarps_pgdata:

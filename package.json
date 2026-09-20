@@ -1,0 +1,16 @@
+{
+  "name": "mfarps",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Municipal Fisherfolk & Boat Permit System (PWA)",
+  "scripts": {
+    "setup": "docker compose up -d && npm install --prefix server && npm install --prefix client && npm run seed --prefix server",
+    "dev": "concurrently -n server,client -c cyan,green \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "seed": "npm run seed --prefix server",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
