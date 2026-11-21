@@ -3,7 +3,9 @@ import { Alert, Button, Card, Col, Form, Modal, Row, Spinner, Table } from "reac
 import { CheckCircle, Clock, CreditCard, Printer, Search, Settings, Upload } from "lucide-react";
 import { api, peso, formatDate } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
+import { OfficialDocHeader } from "../components/OfficialDocHeader";
 import { useAuth } from "../context/AuthContext";
+import { canManageFees, canProcessPayments } from "../permissions";
 
 type Payment = {
   id: number;
@@ -75,10 +77,12 @@ export function Payments() {
           <p className="text-muted mb-0">Process and track permit payments</p>
         </div>
         <div className="d-flex gap-2">
-          {user?.role === "Head Admin" && (
+          {user && canManageFees(user.role) && (
             <Button variant="secondary" onClick={() => setShowFees(true)}><Settings size={16} className="me-1" /> Fee Settings</Button>
           )}
-          <Button onClick={() => setShowPay(true)}>₱ Add Payment</Button>
+          {user && canProcessPayments(user.role) && (
+            <Button onClick={() => setShowPay(true)}>₱ Add Payment</Button>
+          )}
         </div>
       </div>
       <Row className="g-3 mb-4">
@@ -219,33 +223,96 @@ export function Payments() {
         </Modal.Footer>
       </Modal>
 
-      <Modal show={!!receipt} onHide={() => setReceipt(null)}>
-        <Modal.Header closeButton><Modal.Title>Official Receipt</Modal.Title></Modal.Header>
+      <Modal show={!!receipt} onHide={() => setReceipt(null)} centered>
+        <Modal.Header closeButton className="no-print"><Modal.Title>Official Receipt</Modal.Title></Modal.Header>
         {receipt && (
           <Modal.Body>
-            <div className="border rounded p-4">
-              <div className="text-center mb-3">
-                <img src="/logo.svg" width={72} height={72} alt="Rizal" />
-                <h3 className="h5 mt-2">MUNICIPALITY OF DR. JOSE P. RIZAL</h3>
-                <div>OFFICIAL RECEIPT</div>
+            <article className="official-doc receipt print-document">
+              <div className="official-doc-inner">
+                <OfficialDocHeader
+                  title={
+                    receipt.permit_type === "Renewal"
+                      ? "Official Receipt — Permit Renewal"
+                      : receipt.permit_type === "Replacement"
+                        ? "Official Receipt — Permit Replacement"
+                        : "Official Receipt — New Fisherfolk Permit"
+                  }
+                  subtitle={`Payment received from ${receipt.fisherfolk_name}${receipt.barangay ? ` · ${receipt.barangay}` : ""}`}
+                  logoSize={88}
+                />
+                <div className="official-meta-grid">
+                  <div className="official-meta-item highlight">
+                    <label>Receipt No.</label>
+                    <div className="value">{receipt.public_id}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Date Paid</label>
+                    <div className="value">{formatDate(receipt.paid_at)}</div>
+                  </div>
+                  <div className="official-meta-item full">
+                    <label>Received From (Fisherfolk)</label>
+                    <div className="value">{receipt.fisherfolk_name}</div>
+                  </div>
+                  {receipt.barangay ? (
+                    <div className="official-meta-item">
+                      <label>Barangay</label>
+                      <div className="value">{receipt.barangay}</div>
+                    </div>
+                  ) : null}
+                  <div className="official-meta-item">
+                    <label>Permit Number</label>
+                    <div className="value">{receipt.permit_number}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Paper / Transaction Type</label>
+                    <div className="value">{receipt.permit_type}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Payment Method</label>
+                    <div className="value">{receipt.payment_method}</div>
+                  </div>
+                  {receipt.or_number ? (
+                    <div className="official-meta-item">
+                      <label>OR Number</label>
+                      <div className="value">{receipt.or_number}</div>
+                    </div>
+                  ) : null}
+                  {receipt.reference_number ? (
+                    <div className="official-meta-item full">
+                      <label>Reference Number</label>
+                      <div className="value">{receipt.reference_number}</div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="official-amount-box">
+                  <span className="label">Total Amount Paid</span>
+                  <span className="amount">{peso(receipt.amount)}</span>
+                </div>
+                <div className="official-signatures">
+                  <div>
+                    <div className="official-sign-line">
+                      <div className="name">{receipt.cashier || "________________"}</div>
+                      <div className="role">Cashier / Collecting Officer</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="official-sign-line">
+                      <div className="name">Municipal Treasurer</div>
+                      <div className="role">Authorized Signatory</div>
+                    </div>
+                  </div>
+                </div>
+                <footer className="official-doc-footer">
+                  Official receipt of the Municipality of Dr. Jose P. Rizal, Palawan · MFARPS<br />
+                  Keep this receipt for your records. Valid only when duly signed and sealed.
+                </footer>
               </div>
-              <p><strong>Receipt No.</strong> {receipt.public_id}</p>
-              <p><strong>Date</strong> {formatDate(receipt.paid_at)}</p>
-              <p><strong>Name</strong> {receipt.fisherfolk_name}</p>
-              <p><strong>Permit</strong> {receipt.permit_number}</p>
-              <p><strong>Type</strong> {receipt.permit_type}</p>
-              {receipt.or_number && <p><strong>OR Number</strong> {receipt.or_number}</p>}
-              {receipt.reference_number && <p><strong>Reference</strong> {receipt.reference_number}</p>}
-              <div className="d-flex justify-content-between border-top pt-3">
-                <strong>Total Amount</strong>
-                <strong>{peso(receipt.amount)}</strong>
-              </div>
-              {receipt.cashier && <div className="text-center mt-3 small">Processed by: {receipt.cashier}</div>}
-            </div>
+            </article>
           </Modal.Body>
         )}
         <Modal.Footer className="no-print">
-          <Button onClick={() => window.print()}><Printer size={16} className="me-1" /> Print Receipt</Button>
+          <Button onClick={() => window.print()}><Printer size={16} className="me-1" /> Print / Save as PDF</Button>
+          <Button variant="outline-secondary" onClick={() => setReceipt(null)}>Close</Button>
         </Modal.Footer>
       </Modal>
 

@@ -15,32 +15,39 @@ import {
 import { Button, Offcanvas } from "react-bootstrap";
 import { useAuth } from "../context/AuthContext";
 import { InstallPrompt } from "./InstallPrompt";
-import type { Role } from "../api";
+import { canAccess, ROLE_FUNCTION, type AppPath } from "../permissions";
 
-const navigation: { name: string; path: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
-  { name: "Dashboard", path: "/", icon: LayoutDashboard, roles: ["Head Admin", "Staff", "Cashier"] },
-  { name: "Renew / Permit", path: "/renew-permit", icon: FileText, roles: ["Head Admin", "Staff"] },
-  { name: "Records", path: "/records", icon: FolderOpen, roles: ["Head Admin", "Staff", "Cashier"] },
-  { name: "Reports", path: "/reports", icon: BarChart3, roles: ["Head Admin", "Staff"] },
-  { name: "Payments", path: "/payments", icon: Wallet, roles: ["Head Admin", "Staff", "Cashier"] },
-  { name: "Notifications", path: "/notifications", icon: Bell, roles: ["Head Admin", "Staff", "Cashier"] },
-  { name: "User Management", path: "/user-management", icon: Users, roles: ["Head Admin"] },
-  { name: "Settings", path: "/settings", icon: SettingsIcon, roles: ["Head Admin"] },
+const navigation: { name: string; path: AppPath; icon: typeof LayoutDashboard }[] = [
+  { name: "Dashboard", path: "/", icon: LayoutDashboard },
+  { name: "Renew / Permit", path: "/renew-permit", icon: FileText },
+  { name: "Records", path: "/records", icon: FolderOpen },
+  { name: "Reports", path: "/reports", icon: BarChart3 },
+  { name: "Payments", path: "/payments", icon: Wallet },
+  { name: "Notifications", path: "/notifications", icon: Bell },
+  { name: "User Management", path: "/user-management", icon: Users },
+  { name: "Settings", path: "/settings", icon: SettingsIcon },
 ];
 
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
-  const items = navigation.filter((item) => user && item.roles.includes(user.role));
+  const items = navigation.filter((item) => user && canAccess(user.role, item.path));
+  const roleInfo = user ? ROLE_FUNCTION[user.role] : null;
 
   return (
     <div className="d-flex flex-column h-100 p-3 text-white app-sidebar">
       <div className="d-flex align-items-center gap-3 pb-3 mb-3 border-bottom border-secondary">
-        <img src="/logo.svg" alt="MFARPS" width={48} height={48} />
+        <img src="/logo.png" alt="Municipality of Dr. Jose P. Rizal" width={48} height={48} style={{ objectFit: "contain" }} />
         <div>
           <div className="fw-bold">MFARPS</div>
           <small className="text-white-50">Municipal Fisherfolk & Boat Permit System</small>
         </div>
       </div>
+      {roleInfo && (
+        <div className="small mb-3 pb-3 border-bottom border-secondary text-white-50">
+          <div className="text-white fw-semibold mb-1">{user?.role}</div>
+          {roleInfo.summary}
+        </div>
+      )}
       <nav className="nav flex-column gap-1 flex-grow-1">
         {items.map((item) => {
           const Icon = item.icon;
@@ -73,8 +80,7 @@ export function Layout() {
 
   if (!user) return <Navigate to="/login" replace />;
 
-  const allowed = navigation.find((n) => n.path === location.pathname);
-  if (allowed && !allowed.roles.includes(user.role)) {
+  if (!canAccess(user.role, location.pathname)) {
     return <Navigate to="/" replace />;
   }
 
@@ -104,7 +110,7 @@ export function Layout() {
             <div className="ms-auto d-flex align-items-center gap-3">
               <div className="text-end d-none d-sm-block">
                 <div className="small text-muted">{new Date().toLocaleDateString("en-PH", { dateStyle: "long" })}</div>
-                <div className="small">{user.role}</div>
+                <div className="small fw-semibold">{user.name} · {user.role}</div>
               </div>
               <div
                 className="rounded-circle d-grid place-items-center text-white fw-bold"

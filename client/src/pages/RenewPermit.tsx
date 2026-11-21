@@ -3,6 +3,7 @@ import { Alert, Button, Card, Col, Form, ListGroup, Modal, Row, Spinner } from "
 import { Anchor, CheckCircle, FileText, Printer, Search, Upload, User, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { api } from "../api";
+import { OfficialDocHeader } from "../components/OfficialDocHeader";
 
 type Lookups = {
   barangays: string[];
@@ -281,34 +282,87 @@ export function RenewPermit() {
         </Card.Body>
       </Card>
 
-      <Modal show={!!preview} onHide={() => setPreview(null)} size="lg">
-        <Modal.Header closeButton><Modal.Title>Permit Preview</Modal.Title></Modal.Header>
+      <Modal show={!!preview} onHide={() => setPreview(null)} size="lg" centered>
+        <Modal.Header closeButton className="no-print"><Modal.Title>Permit Preview</Modal.Title></Modal.Header>
         {preview && (
           <Modal.Body>
-            <div className="permit-sheet p-4 p-md-5">
-              <div className="text-center mb-4">
-                <img src="/logo.svg" alt="Rizal" width={80} height={80} />
-                <h3 className="h5 mt-3 mb-0">MUNICIPALITY OF DR. JOSE P. RIZAL</h3>
-                <div className="text-primary">PALAWAN, PHILIPPINES</div>
-                <div className="fw-bold mt-2">FISHERFOLK PERMIT</div>
+            <article className="official-doc permit print-document">
+              <div className="official-doc-inner">
+                <OfficialDocHeader
+                  title={
+                    preview.permitType === "Renewal"
+                      ? "Fisherfolk Permit Renewal"
+                      : preview.permitType === "Replacement"
+                        ? "Fisherfolk Permit Replacement"
+                        : "New Fisherfolk Permit"
+                  }
+                  subtitle={`Issued to ${preview.fisherfolkName} · ${preview.boatType || "Registered Boat"} · ${preview.barangay}`}
+                />
+                <div className="official-meta-grid">
+                  <div className="official-meta-item highlight">
+                    <label>Permit Number</label>
+                    <div className="value">{preview.permit_number}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Date Issued</label>
+                    <div className="value">{new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })}</div>
+                  </div>
+                  <div className="official-meta-item full">
+                    <label>Name of Fisherfolk</label>
+                    <div className="value">{preview.fisherfolkName}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Barangay</label>
+                    <div className="value">{preview.barangay}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Transaction / Paper Type</label>
+                    <div className="value">{preview.permitType}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Boat / Vessel Type</label>
+                    <div className="value">{preview.boatType || "—"}</div>
+                  </div>
+                  <div className="official-meta-item">
+                    <label>Fishing Method</label>
+                    <div className="value">{preview.fishingMethod || "—"}</div>
+                  </div>
+                </div>
+                <p className="small text-center mb-0" style={{ color: "#475569" }}>
+                  This {preview.permitType === "Renewal" ? "renewal permit" : preview.permitType === "Replacement" ? "replacement permit" : "new fisherfolk permit"}{" "}
+                  certifies that <strong>{preview.fisherfolkName}</strong> of <strong>{preview.barangay}</strong>,
+                  operating a <strong>{preview.boatType || "registered boat"}</strong>, is duly authorized
+                  to engage in fishing activities within the territorial waters of the Municipality
+                  of Dr. Jose P. Rizal, Palawan, subject to existing laws and municipal ordinances.
+                </p>
+                <div className="official-signatures">
+                  <div>
+                    <div className="official-sign-line">
+                      <div className="name">Municipal Agriculturist</div>
+                      <div className="role">Recommending Approval</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="official-sign-line">
+                      <div className="name">Municipal Mayor</div>
+                      <div className="role">Approving Authority</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="official-qr-block">
+                  <QRCodeSVG value={`${window.location.origin}/verify/${preview.permit_number}`} size={112} />
+                  <div className="hint">Scan to verify authenticity online</div>
+                </div>
+                <footer className="official-doc-footer">
+                  Official document of the Municipality of Dr. Jose P. Rizal, Palawan · MFARPS<br />
+                  Any alteration or unauthorized reproduction of this permit is punishable by law.
+                </footer>
               </div>
-              <Row className="mb-4">
-                <Col><small className="text-muted">Permit Number</small><div className="fw-bold">{preview.permit_number}</div></Col>
-                <Col><small className="text-muted">Issue Date</small><div>{new Date().toLocaleDateString()}</div></Col>
-                <Col xs={12} md={6}><small className="text-muted">Name</small><div>{preview.fisherfolkName}</div></Col>
-                <Col xs={12} md={6}><small className="text-muted">Barangay</small><div>{preview.barangay}</div></Col>
-                <Col xs={12} md={6}><small className="text-muted">Boat Type</small><div>{preview.boatType}</div></Col>
-                <Col xs={12} md={6}><small className="text-muted">Fishing Method</small><div>{preview.fishingMethod}</div></Col>
-              </Row>
-              <div className="text-center border-top pt-3">
-                <QRCodeSVG value={`${window.location.origin}/verify/${preview.permit_number}`} size={120} />
-                <div className="small text-muted mt-2">Scan to verify</div>
-              </div>
-            </div>
+            </article>
           </Modal.Body>
         )}
         <Modal.Footer className="no-print">
-          <Button onClick={() => window.print()}><Printer size={16} className="me-1" /> Print Permit</Button>
+          <Button onClick={() => window.print()}><Printer size={16} className="me-1" /> Print / Save as PDF</Button>
           <Button variant="outline-secondary" onClick={() => setPreview(null)}>Close</Button>
         </Modal.Footer>
       </Modal>

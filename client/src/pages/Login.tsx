@@ -33,7 +33,7 @@ export function Login() {
       <Card className="shadow-lg border-0" style={{ maxWidth: 440, width: "100%" }}>
         <Card.Body className="p-4 p-md-5">
           <div className="text-center mb-4">
-            <img src="/logo.svg" alt="MFARPS" width={88} height={88} className="mb-3" />
+            <img src="/logo.png" alt="Municipality of Dr. Jose P. Rizal" width={120} height={120} className="mb-3" style={{ objectFit: "contain" }} />
             <h1 className="h3 text-primary fw-bold mb-1">MFARPS</h1>
             <p className="text-muted mb-0">Municipal Fisherfolk & Boat Permit System</p>
             <small className="text-secondary">Municipality of Dr. Jose P. Rizal, Palawan</small>
@@ -72,10 +72,11 @@ export function Login() {
             </Button>
           </Form>
           <div className="text-center mt-4 pt-3 border-top">
-            <small className="text-muted d-block">
+            <small className="text-muted d-block mb-2">
               <Shield size={12} className="me-1" />
-              Secure Government System
+              Access is role-based: Head Admin · Staff · Cashier
             </small>
+            <small className="text-secondary d-block">Staff checks → Admin approves/rejects → Cashier collects</small>
             <small className="text-secondary">© 2026 Municipality of Dr. Jose P. Rizal</small>
           </div>
         </Card.Body>

@@ -6,6 +6,7 @@ const map: Record<string, string> = {
   Released: "primary",
   Verified: "info",
   Pending: "warning",
+  Rejected: "danger",
   Expired: "danger",
   Inactive: "danger",
   "Fully Paid": "success",

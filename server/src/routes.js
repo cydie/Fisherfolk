@@ -131,6 +131,7 @@ router.get(
                 SELECT CASE
                   WHEN COUNT(*) FILTER (WHERE p.status IN ('Active','Approved','Released')) > 0 THEN 'Active'
                   WHEN COUNT(*) FILTER (WHERE p.status IN ('Pending','Verified')) > 0 THEN 'Pending'
+                  WHEN COUNT(*) FILTER (WHERE p.status = 'Rejected') > 0 THEN 'Rejected'
                   WHEN COUNT(*) FILTER (WHERE p.status = 'Expired') > 0 THEN 'Expired'
                   ELSE 'None'
                 END
@@ -220,9 +221,11 @@ router.get(
       where.push(`p.status = $${params.length}`);
     }
     const { rows } = await query(
-      `SELECT p.*, f.name AS owner_name, f.barangay, f.public_id AS fisherfolk_public_id, f.contact
+      `SELECT p.*, f.name AS owner_name, f.barangay, f.public_id AS fisherfolk_public_id, f.contact,
+              u.name AS rejected_by_name
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       LEFT JOIN users u ON u.id = p.rejected_by
        WHERE ${where.join(" AND ")}
        ORDER BY p.created_at DESC`,
       params
@@ -303,14 +306,64 @@ router.patch(
   "/permits/:id",
   requireRoles("Head Admin", "Staff"),
   asyncH(async (req, res) => {
-    const { status } = req.body;
-    const allowed = ["Pending", "Verified", "Approved", "Active", "Released", "Expired"];
-    if (!allowed.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    const { status, rejectionReason } = req.body;
+    // Workflow: Staff verifies → Head Admin approves/rejects → Cashier collects after Approved
+    const allowedByRole =
+      req.user.role === "Head Admin"
+        ? ["Pending", "Verified", "Approved", "Rejected", "Active", "Released", "Expired"]
+        : ["Pending", "Verified"];
+    if (!allowedByRole.includes(status)) {
+      return res.status(403).json({
+        error:
+          req.user.role === "Staff"
+            ? "Staff can only set status to Pending or Verified. Head Admin handles approval/release."
+            : "Invalid status",
+      });
+    }
+
+    if (status === "Rejected") {
+      const reason = String(rejectionReason || "").trim();
+      if (!reason) {
+        return res.status(400).json({ error: "Rejection reason is required" });
+      }
+      const { rows } = await query(
+        `UPDATE permits
+         SET status = 'Rejected',
+             rejection_reason = $1,
+             rejected_at = NOW(),
+             rejected_by = $2
+         WHERE id = $3
+         RETURNING *`,
+        [reason, req.user.id, req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: "Permit not found" });
+      await addNotification(
+        "application",
+        "Permit Application Rejected",
+        `${rows[0].permit_number} (${rows[0].permit_type}) was rejected: ${reason}`
+      );
+      await logActivity(req.user, `Rejected ${rows[0].permit_number} (${rows[0].permit_type}): ${reason}`);
+      return res.json(rows[0]);
+    }
+
     const { rows } = await query(
-      "UPDATE permits SET status = $1 WHERE id = $2 RETURNING *",
+      `UPDATE permits
+       SET status = $1,
+           rejection_reason = CASE WHEN $1 = 'Approved' THEN NULL ELSE rejection_reason END,
+           rejected_at = CASE WHEN $1 = 'Approved' THEN NULL ELSE rejected_at END,
+           rejected_by = CASE WHEN $1 = 'Approved' THEN NULL ELSE rejected_by END
+       WHERE id = $2
+       RETURNING *`,
       [status, req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ error: "Permit not found" });
+    if (status === "Approved") {
+      await addNotification(
+        "application",
+        "Permit Application Approved",
+        `${rows[0].permit_number} (${rows[0].permit_type}) approved — ready for cashier payment`
+      );
+    }
     await logActivity(req.user, `Set ${rows[0].permit_number} status to ${status}`);
     res.json(rows[0]);
   })
@@ -367,11 +420,22 @@ router.post(
       return res.status(400).json({ error: "Permit number, name, amount, and method are required" });
     }
     const permit = await query(
-      `SELECT p.id, f.barangay FROM permits p
+      `SELECT p.id, p.status, f.barangay FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
        WHERE p.permit_number = $1`,
       [permitNumber]
     );
+    if (permit.rows[0]) {
+      const permitStatus = permit.rows[0].status;
+      if (permitStatus === "Rejected") {
+        return res.status(400).json({ error: "Cannot collect payment for a rejected permit application" });
+      }
+      if (!["Approved", "Active", "Released"].includes(permitStatus)) {
+        return res.status(400).json({
+          error: "Permit must be approved by Head Admin before cashier can collect payment",
+        });
+      }
+    }
     const publicId = await nextCode("PAY", "payments", "public_id");
     const { rows } = await query(
       `INSERT INTO payments (
@@ -394,7 +458,7 @@ router.post(
       ]
     );
     if (status === "Fully Paid" && permit.rows[0]) {
-      await query("UPDATE permits SET status = 'Active' WHERE id = $1 AND status IN ('Pending','Verified','Approved')", [
+      await query("UPDATE permits SET status = 'Active' WHERE id = $1 AND status = 'Approved'", [
         permit.rows[0].id,
       ]);
     }
@@ -557,6 +621,7 @@ router.put(
 
 router.get(
   "/reports",
+  requireRoles("Head Admin", "Staff"),
   asyncH(async (req, res) => {
     await expireOldPermits();
     const barangay = req.query.barangay || "All Barangays";
@@ -597,29 +662,188 @@ router.get(
             AND expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days') AS expiring
       `
     );
+
+    const listingParams = [];
+    const listingFilter =
+      barangay !== "All Barangays" ? (listingParams.push(barangay), "WHERE f.barangay = $1") : "";
+
+    const newFisherfolk = await query(
+      `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'New Application'
+       ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
+      listingParams
+    );
+    const renewals = await query(
+      `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'Renewal'
+       ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
+      listingParams
+    );
+    const boats = await query(
+      `SELECT COALESCE(b.boat_name, p.boat_type) AS boat_name, p.boat_type, p.fishing_method,
+              f.name AS owner_name, f.barangay, f.public_id AS fisherfolk_id,
+              p.permit_number, p.permit_type, p.status
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       LEFT JOIN boats b ON b.id = p.boat_id
+       ${listingFilter}
+       ORDER BY f.name ASC, p.boat_type ASC`,
+      listingParams
+    );
+    const replacements = await query(
+      `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'Replacement'
+       ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
+      listingParams
+    );
+    const payments = await query(
+      `SELECT pay.public_id AS receipt_no, pay.or_number, pay.fisherfolk_name, pay.barangay,
+              pay.permit_number, pay.permit_type, pay.amount::float AS amount,
+              pay.payment_method, pay.status, pay.paid_at, pay.cashier, pay.reference_number
+       FROM payments pay
+       ${barangay !== "All Barangays" ? "WHERE pay.barangay = $1" : ""}
+       ORDER BY pay.paid_at DESC, pay.id DESC`,
+      barangay !== "All Barangays" ? [barangay] : []
+    );
+    const expiring = await query(
+      `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingFilter ? listingFilter + " AND" : "WHERE"}
+         p.status IN ('Active','Approved','Released')
+         AND p.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+       ORDER BY p.expiry_date ASC, f.name ASC`,
+      listingParams
+    );
+    const allPermits = await query(
+      `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
+       FROM permits p
+       JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingFilter}
+       ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
+      listingParams
+    );
+
     const colors = ["#3b82f6", "#14b8a6", "#8b5cf6", "#f59e0b", "#ef4444", "#64748b", "#0ea5e9"];
     res.json({
       monthly: monthly.rows,
       barangay: byBarangay.rows.map((r, i) => ({ ...r, color: colors[i % colors.length] })),
       boatTypes: boatTypes.rows,
       totals: totals.rows[0],
+      listings: {
+        newFisherfolk: newFisherfolk.rows,
+        renewals: renewals.rows,
+        replacements: replacements.rows,
+        boats: boats.rows,
+        payments: payments.rows,
+        expiring: expiring.rows,
+        allPermits: allPermits.rows,
+      },
     });
+  })
+);
+
+router.get(
+  "/barangays",
+  requireAuth,
+  asyncH(async (_req, res) => {
+    const { rows } = await query(
+      "SELECT id, name, status, created_at FROM barangays ORDER BY name ASC"
+    );
+    res.json(rows);
+  })
+);
+
+router.post(
+  "/barangays",
+  requireRoles("Head Admin"),
+  asyncH(async (req, res) => {
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Barangay name is required" });
+    try {
+      const { rows } = await query(
+        `INSERT INTO barangays (name, status) VALUES ($1, COALESCE($2, 'Active'))
+         RETURNING id, name, status, created_at`,
+        [name, req.body.status || "Active"]
+      );
+      await logActivity(req.user, `Added barangay ${name}`);
+      res.status(201).json(rows[0]);
+    } catch (err) {
+      if (err?.code === "23505") return res.status(409).json({ error: "Barangay already exists" });
+      throw err;
+    }
+  })
+);
+
+router.patch(
+  "/barangays/:id",
+  requireRoles("Head Admin"),
+  asyncH(async (req, res) => {
+    const name = req.body.name != null ? String(req.body.name).trim() : null;
+    const status = req.body.status || null;
+    if (name === "") return res.status(400).json({ error: "Barangay name is required" });
+    if (status && !["Active", "Inactive"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+    try {
+      const { rows } = await query(
+        `UPDATE barangays SET
+           name = COALESCE($1, name),
+           status = COALESCE($2, status)
+         WHERE id = $3
+         RETURNING id, name, status, created_at`,
+        [name, status, req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: "Barangay not found" });
+      await logActivity(req.user, `Updated barangay ${rows[0].name}`);
+      res.json(rows[0]);
+    } catch (err) {
+      if (err?.code === "23505") return res.status(409).json({ error: "Barangay already exists" });
+      throw err;
+    }
+  })
+);
+
+router.delete(
+  "/barangays/:id",
+  requireRoles("Head Admin"),
+  asyncH(async (req, res) => {
+    const existing = await query("SELECT name FROM barangays WHERE id = $1", [req.params.id]);
+    if (!existing.rows[0]) return res.status(404).json({ error: "Barangay not found" });
+    const inUse = await query(
+      "SELECT COUNT(*)::int AS n FROM fisherfolk WHERE barangay = $1",
+      [existing.rows[0].name]
+    );
+    if (inUse.rows[0].n > 0) {
+      return res.status(400).json({
+        error: "Cannot delete barangay that is used by fisherfolk records. Set it Inactive instead.",
+      });
+    }
+    await query("DELETE FROM barangays WHERE id = $1", [req.params.id]);
+    await logActivity(req.user, `Deleted barangay ${existing.rows[0].name}`);
+    res.json({ ok: true });
   })
 );
 
 router.get(
   "/lookups",
   asyncH(async (_req, res) => {
+    const { rows } = await query(
+      "SELECT name FROM barangays WHERE status = 'Active' ORDER BY name ASC"
+    );
     res.json({
-      barangays: [
-        "Barangay Canipo",
-        "Barangay Taburi",
-        "Barangay Campong-Ulay",
-        "Barangay Iraan",
-        "Barangay Culasian",
-        "Barangay Lao",
-        "Barangay Panalingaan",
-      ],
+      barangays: rows.map((r) => r.name),
       boatTypes: ["Motorized Banca", "Non-Motorized Banca", "Fishing Boat", "Motorboat"],
       fishingMethods: ["Hook and Line", "Net Fishing", "Trap Fishing", "Diving"],
       permitTypes: ["New Application", "Renewal", "Replacement"],

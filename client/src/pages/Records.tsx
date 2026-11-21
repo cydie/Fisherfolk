@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Form, Modal, Nav, Row, Spinner, Table } from "react-bootstrap";
+import { Alert, Button, Card, Col, Form, Modal, Nav, Row, Spinner, Table } from "react-bootstrap";
 import { Archive, Eye, Filter, Pencil, Search } from "lucide-react";
-import { api, formatDate } from "../api";
+import { api, formatDate, formatDateTime } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
+import { useAuth } from "../context/AuthContext";
+import {
+  allowedPermitStatuses,
+  canEditRecords,
+  canUpdatePermitStatus,
+  canViewRejectedHistory,
+} from "../permissions";
 
 type Fisherfolk = {
   id: number;
@@ -19,49 +26,75 @@ type Fisherfolk = {
 type Permit = {
   id: number;
   permit_number: string;
+  permit_type: string;
   owner_name: string;
   barangay: string;
   boat_type: string;
   issue_date: string;
   expiry_date: string;
   status: string;
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
+  rejected_by_name?: string | null;
 };
 
-const barangays = ["All Barangays", "Barangay Canipo", "Barangay Taburi", "Barangay Campong-Ulay", "Barangay Iraan", "Barangay Culasian", "Barangay Lao", "Barangay Panalingaan"];
-const statuses = ["All Status", "Active", "Expired", "Pending"];
+const statuses = ["All Status", "Active", "Approved", "Verified", "Pending", "Rejected", "Expired"];
 const boatTypes = ["All Boat Types", "Motorized Banca", "Non-Motorized Banca", "Fishing Boat", "Motorboat"];
 
 export function Records() {
-  const [tab, setTab] = useState<"fisherfolk" | "permits" | "archived">("fisherfolk");
+  const { user } = useAuth();
+  const canEdit = user ? canEditRecords(user.role) : false;
+  const canStatus = user ? canUpdatePermitStatus(user.role) : false;
+  const canRejected = user ? canViewRejectedHistory(user.role) : false;
+  const statusOptions = user ? allowedPermitStatuses(user.role) : [];
+  const [tab, setTab] = useState<"fisherfolk" | "permits" | "rejected" | "archived">("fisherfolk");
   const [search, setSearch] = useState("");
   const [barangay, setBarangay] = useState("All Barangays");
+  const [barangays, setBarangays] = useState<string[]>(["All Barangays"]);
   const [status, setStatus] = useState("All Status");
   const [boatType, setBoatType] = useState("All Boat Types");
   const [showFilters, setShowFilters] = useState(false);
   const [people, setPeople] = useState<Fisherfolk[]>([]);
   const [permits, setPermits] = useState<Permit[]>([]);
+  const [rejected, setRejected] = useState<Permit[]>([]);
   const [archived, setArchived] = useState<Fisherfolk[]>([]);
   const [loading, setLoading] = useState(true);
   const [edit, setEdit] = useState<Fisherfolk | null>(null);
   const [detail, setDetail] = useState<Fisherfolk | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<Permit | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectDetail, setRejectDetail] = useState<Permit | null>(null);
+  const [actionError, setActionError] = useState("");
+
+  useEffect(() => {
+    api<{ barangays: string[] }>("/lookups")
+      .then((l) => setBarangays(["All Barangays", ...l.barangays]))
+      .catch(() => setBarangays(["All Barangays"]));
+  }, []);
 
   async function load() {
     setLoading(true);
     const q = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=${encodeURIComponent(status)}&boatType=${encodeURIComponent(boatType)}`;
-    const [a, b, c] = await Promise.all([
+    const rejectedQ = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=Rejected`;
+    const requests: Promise<unknown>[] = [
       api<Fisherfolk[]>(`/fisherfolk?${q}`),
       api<Permit[]>(`/permits?${q}`),
       api<Fisherfolk[]>(`/fisherfolk?archived=true&search=${encodeURIComponent(search)}`),
-    ]);
-    setPeople(a);
-    setPermits(b);
-    setArchived(c);
+    ];
+    if (canRejected) {
+      requests.push(api<Permit[]>(`/permits?${rejectedQ}`));
+    }
+    const results = await Promise.all(requests);
+    setPeople(results[0] as Fisherfolk[]);
+    setPermits(results[1] as Permit[]);
+    setArchived(results[2] as Fisherfolk[]);
+    setRejected(canRejected ? (results[3] as Permit[]) : []);
     setLoading(false);
   }
 
   useEffect(() => {
     load().catch(() => setLoading(false));
-  }, [search, barangay, status, boatType]);
+  }, [search, barangay, status, boatType, canRejected]);
 
   const rows = tab === "fisherfolk" ? people : tab === "archived" ? archived : [];
 
@@ -70,22 +103,69 @@ export function Records() {
   const paged = useMemo(() => {
     const start = (page - 1) * pageSize;
     if (tab === "permits") return permits.slice(start, start + pageSize);
+    if (tab === "rejected") return rejected.slice(start, start + pageSize);
     return rows.slice(start, start + pageSize);
-  }, [page, tab, permits, rows]);
-  const total = tab === "permits" ? permits.length : rows.length;
+  }, [page, tab, permits, rejected, rows]);
+  const total = tab === "permits" ? permits.length : tab === "rejected" ? rejected.length : rows.length;
   const pages = Math.max(1, Math.ceil(total / pageSize));
 
   useEffect(() => setPage(1), [tab, search, barangay, status, boatType]);
 
+  async function updatePermitStatus(id: number, nextStatus: string, reason?: string) {
+    setActionError("");
+    try {
+      await api(`/permits/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus, rejectionReason: reason || undefined }),
+      });
+      await load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to update status");
+    }
+  }
+
+  function onWorkflowChange(permit: Permit, nextStatus: string) {
+    if (nextStatus === "Rejected") {
+      setRejectTarget(permit);
+      setRejectReason("");
+      return;
+    }
+    updatePermitStatus(permit.id, nextStatus);
+  }
+
+  async function confirmReject() {
+    if (!rejectTarget) return;
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setActionError("Please enter a rejection reason");
+      return;
+    }
+    await updatePermitStatus(rejectTarget.id, "Rejected", reason);
+    setRejectTarget(null);
+    setRejectReason("");
+  }
+
   return (
     <div>
       <h1 className="h3 mb-1">Records Management</h1>
-      <p className="text-muted">View and manage fisherfolk and permit records</p>
+      <p className="text-muted">
+        {canEdit
+          ? "Staff verifies applications; Head Admin approves or rejects; Cashier collects after approval"
+          : "View-only access — look up approved permits for payment processing"}
+      </p>
+      {actionError && <Alert variant="danger">{actionError}</Alert>}
       <Card className="stat-card">
         <Card.Header className="bg-white">
           <Nav variant="pills">
             <Nav.Item><Nav.Link active={tab === "fisherfolk"} onClick={() => setTab("fisherfolk")}>Fisherfolk Records</Nav.Link></Nav.Item>
             <Nav.Item><Nav.Link active={tab === "permits"} onClick={() => setTab("permits")}>Permit Records</Nav.Link></Nav.Item>
+            {canRejected && (
+              <Nav.Item>
+                <Nav.Link active={tab === "rejected"} onClick={() => setTab("rejected")}>
+                  Rejected Applications{rejected.length > 0 ? ` (${rejected.length})` : ""}
+                </Nav.Link>
+              </Nav.Item>
+            )}
             <Nav.Item><Nav.Link active={tab === "archived"} onClick={() => setTab("archived")}>Archived Records</Nav.Link></Nav.Item>
           </Nav>
         </Card.Header>
@@ -103,7 +183,7 @@ export function Records() {
               </Button>
             </Col>
           </Row>
-          {showFilters && (
+          {showFilters && tab !== "rejected" && (
             <Row className="g-3 mb-3">
               <Col md={4}>
                 <Form.Label>Barangay</Form.Label>
@@ -127,25 +207,100 @@ export function Records() {
               )}
             </Row>
           )}
+          {showFilters && tab === "rejected" && (
+            <Row className="g-3 mb-3">
+              <Col md={4}>
+                <Form.Label>Barangay</Form.Label>
+                <Form.Select value={barangay} onChange={(e) => setBarangay(e.target.value)}>
+                  {barangays.map((b) => <option key={b}>{b}</option>)}
+                </Form.Select>
+              </Col>
+            </Row>
+          )}
           {loading ? (
             <div className="text-center py-4"><Spinner animation="border" /></div>
+          ) : tab === "rejected" ? (
+            rejected.length === 0 ? (
+              <div className="text-center text-muted py-5">
+                <Archive className="mb-2" />
+                <div>No rejected renew or new permit applications</div>
+              </div>
+            ) : (
+              <Table responsive hover>
+                <thead>
+                  <tr>
+                    <th>Permit Number</th>
+                    <th>Type</th>
+                    <th>Owner Name</th>
+                    <th>Barangay</th>
+                    <th>Rejected Date</th>
+                    <th>Rejected By</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(paged as Permit[]).map((p) => (
+                    <tr key={p.id}>
+                      <td>{p.permit_number}</td>
+                      <td>{p.permit_type}</td>
+                      <td>{p.owner_name}</td>
+                      <td>{p.barangay}</td>
+                      <td>{p.rejected_at ? formatDateTime(p.rejected_at) : "—"}</td>
+                      <td>{p.rejected_by_name || "—"}</td>
+                      <td className="text-truncate" style={{ maxWidth: 220 }} title={p.rejection_reason || ""}>
+                        {p.rejection_reason || "—"}
+                      </td>
+                      <td>
+                        <Button size="sm" variant="outline-primary" onClick={() => setRejectDetail(p)}>
+                          <Eye size={14} />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )
           ) : tab === "permits" ? (
             <Table responsive hover>
               <thead>
                 <tr>
-                  <th>Permit Number</th><th>Owner Name</th><th>Barangay</th><th>Boat Type</th><th>Issue Date</th><th>Expiry Date</th><th>Status</th>
+                  <th>Permit Number</th>
+                  <th>Type</th>
+                  <th>Owner Name</th>
+                  <th>Barangay</th>
+                  <th>Boat Type</th>
+                  <th>Issue Date</th>
+                  <th>Expiry Date</th>
+                  <th>Status</th>
+                  {canStatus && <th>Workflow</th>}
                 </tr>
               </thead>
               <tbody>
                 {(paged as Permit[]).map((p) => (
                   <tr key={p.id}>
                     <td>{p.permit_number}</td>
+                    <td>{p.permit_type}</td>
                     <td>{p.owner_name}</td>
                     <td>{p.barangay}</td>
                     <td>{p.boat_type}</td>
                     <td>{formatDate(p.issue_date)}</td>
                     <td>{formatDate(p.expiry_date)}</td>
                     <td><StatusBadge value={p.status} /></td>
+                    {canStatus && (
+                      <td style={{ minWidth: 150 }}>
+                        <Form.Select
+                          size="sm"
+                          value={p.status}
+                          onChange={(e) => onWorkflowChange(p, e.target.value)}
+                        >
+                          {!statusOptions.includes(p.status) && <option value={p.status}>{p.status}</option>}
+                          {statusOptions.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </Form.Select>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -174,7 +329,7 @@ export function Records() {
                     <td><StatusBadge value={r.permit_status} /></td>
                     <td className="d-flex gap-2">
                       <Button size="sm" variant="outline-primary" onClick={() => setDetail(r)}><Eye size={14} /></Button>
-                      {tab !== "archived" && (
+                      {canEdit && tab !== "archived" && (
                         <>
                           <Button size="sm" variant="outline-success" onClick={() => setEdit(r)}><Pencil size={14} /></Button>
                           <Button
@@ -251,6 +406,71 @@ export function Records() {
             Save
           </Button>
         </Modal.Footer>
+      </Modal>
+
+      <Modal
+        show={!!rejectTarget}
+        onHide={() => {
+          setRejectTarget(null);
+          setRejectReason("");
+        }}
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>Reject application</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {rejectTarget && (
+            <>
+              <p className="mb-2">
+                Reject <strong>{rejectTarget.permit_number}</strong> ({rejectTarget.permit_type}) for{" "}
+                <strong>{rejectTarget.owner_name}</strong>?
+              </p>
+              <Form.Group>
+                <Form.Label>Rejection reason</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={rejectReason}
+                  placeholder="e.g. Incomplete documents, invalid boat details..."
+                  onChange={(e) => setRejectReason(e.target.value)}
+                />
+              </Form.Group>
+            </>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="outline-secondary"
+            onClick={() => {
+              setRejectTarget(null);
+              setRejectReason("");
+            }}
+          >
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={confirmReject}>
+            Confirm Reject
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={!!rejectDetail} onHide={() => setRejectDetail(null)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Rejected application details</Modal.Title>
+        </Modal.Header>
+        {rejectDetail && (
+          <Modal.Body>
+            <p><strong>Permit:</strong> {rejectDetail.permit_number}</p>
+            <p><strong>Type:</strong> {rejectDetail.permit_type}</p>
+            <p><strong>Owner:</strong> {rejectDetail.owner_name}</p>
+            <p><strong>Barangay:</strong> {rejectDetail.barangay}</p>
+            <p><strong>Boat type:</strong> {rejectDetail.boat_type}</p>
+            <p><strong>Status:</strong> <StatusBadge value={rejectDetail.status} /></p>
+            <p><strong>Rejected date:</strong> {rejectDetail.rejected_at ? formatDateTime(rejectDetail.rejected_at) : "—"}</p>
+            <p><strong>Rejected by:</strong> {rejectDetail.rejected_by_name || "—"}</p>
+            <p className="mb-0"><strong>Reason:</strong> {rejectDetail.rejection_reason || "—"}</p>
+          </Modal.Body>
+        )}
       </Modal>
     </div>
   );

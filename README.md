@@ -29,13 +29,15 @@ Then open **http://localhost:5173**
 
 To install it as an app, open the site in Chrome or Edge and use **Install app** (or the in-page prompt).
 
-## Demo accounts
+## Demo accounts & workflow
 
-| Role | Email | Password | Access |
+| Role | Email | Password | Function |
 | --- | --- | --- | --- |
-| Head Admin | `admin@rizal.gov.ph` | `admin123` | Full system, users, settings, fees |
-| Staff | `staff@rizal.gov.ph` | `staff123` | Permits, records, reports, payments |
-| Cashier | `cashier@rizal.gov.ph` | `cashier123` | Dashboard, records, payments, notifications |
+| Head Admin | `admin@rizal.gov.ph` | `admin123` | Full control: approve/release permits, users, fees, barangays, settings, reports |
+| Staff | `staff@rizal.gov.ph` | `staff123` | Encode new/renew permits, verify applications, edit records, reports |
+| Cashier | `cashier@rizal.gov.ph` | `cashier123` | Look up records (view-only), collect payments, print receipts |
+
+**System flow:** Staff encodes permit → Staff verifies → Head Admin approves → Cashier records payment → permit becomes Active.
 
 Inactive sample account (cannot sign in): `staff3@rizal.gov.ph` / `staff123`
 

@@ -38,7 +38,7 @@ export function VerifyPermit() {
       <Card className="shadow border-0" style={{ maxWidth: 560, width: "100%" }}>
         <Card.Body className="p-4">
           <div className="text-center mb-3">
-            <img src="/logo.svg" alt="MFARPS" width={72} height={72} />
+            <img src="/logo.png" alt="Municipality of Dr. Jose P. Rizal" width={72} height={72} style={{ objectFit: "contain" }} />
             <h1 className="h4 mt-2">Permit Verification</h1>
           </div>
           {!permit && !error && (

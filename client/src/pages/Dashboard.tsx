@@ -1,10 +1,17 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { Button, Card, Col, Row, Spinner, Table } from "react-bootstrap";
+import { Alert, Button, Card, Col, Row, Spinner, Table } from "react-bootstrap";
 import { Users, FileCheck, FileX, Clock, Anchor, Plus, RefreshCw, FileText, DollarSign } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, peso, formatDate } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
+import { useAuth } from "../context/AuthContext";
+import {
+  ROLE_FUNCTION,
+  canEncodePermits,
+  canProcessPayments,
+  canViewReports,
+} from "../permissions";
 
 type DashboardData = {
   stats: {
@@ -21,8 +28,10 @@ type DashboardData = {
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
+  const roleInfo = user ? ROLE_FUNCTION[user.role] : null;
 
   useEffect(() => {
     api<DashboardData>("/dashboard")
@@ -56,6 +65,17 @@ export function Dashboard() {
     <div>
       <h1 className="h3 mb-1">Dashboard</h1>
       <p className="text-muted">Municipal Fisherfolk & Boat Permit System Overview</p>
+      {roleInfo && (
+        <Alert variant="primary" className="mb-4">
+          <div className="fw-semibold mb-1">{roleInfo.title}</div>
+          <div className="mb-2">{roleInfo.summary}</div>
+          <ol className="mb-0 ps-3 small">
+            {roleInfo.flow.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </Alert>
+      )}
       <Row className="g-3 mb-4">
         {cards.map((card) => {
           const Icon = card.icon;
@@ -115,12 +135,21 @@ export function Dashboard() {
       </Row>
       <Card className="stat-card mb-4">
         <Card.Body>
-          <h2 className="h6 mb-3">Quick Actions</h2>
+          <h2 className="h6 mb-3">Quick Actions for your role</h2>
           <div className="d-grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <Button onClick={() => navigate("/renew-permit")}><Plus size={16} className="me-1" /> New Permit</Button>
-            <Button variant="success" onClick={() => navigate("/renew-permit")}><RefreshCw size={16} className="me-1" /> Renew Permit</Button>
-            <Button variant="secondary" onClick={() => navigate("/reports")}><FileText size={16} className="me-1" /> Generate Report</Button>
-            <Button variant="info" className="text-white" onClick={() => navigate("/payments")}><DollarSign size={16} className="me-1" /> Add Payment</Button>
+            {user && canEncodePermits(user.role) && (
+              <>
+                <Button onClick={() => navigate("/renew-permit")}><Plus size={16} className="me-1" /> New Permit</Button>
+                <Button variant="success" onClick={() => navigate("/renew-permit")}><RefreshCw size={16} className="me-1" /> Renew Permit</Button>
+              </>
+            )}
+            {user && canViewReports(user.role) && (
+              <Button variant="secondary" onClick={() => navigate("/reports")}><FileText size={16} className="me-1" /> Generate Report</Button>
+            )}
+            {user && canProcessPayments(user.role) && (
+              <Button variant="info" className="text-white" onClick={() => navigate("/payments")}><DollarSign size={16} className="me-1" /> Add Payment</Button>
+            )}
+            <Button variant="outline-primary" onClick={() => navigate("/records")}>View Records</Button>
           </div>
         </Card.Body>
       </Card>

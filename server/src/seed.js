@@ -204,6 +204,13 @@ async function seed() {
     ON CONFLICT (key) DO NOTHING`
   );
 
+  for (const name of BARANGAYS) {
+    await query(
+      `INSERT INTO barangays (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
+      [name]
+    );
+  }
+
   console.log("Seed complete.");
   console.log("Barangays available:", BARANGAYS.join(", "));
   console.log("Demo accounts:");

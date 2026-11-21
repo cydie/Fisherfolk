@@ -85,9 +85,16 @@ export async function initSchema() {
       issue_date DATE,
       expiry_date DATE,
       documents TEXT[] DEFAULT '{}',
+      rejection_reason TEXT,
+      rejected_at TIMESTAMPTZ,
+      rejected_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_by INTEGER REFERENCES users(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE permits ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+    ALTER TABLE permits ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
+    ALTER TABLE permits ADD COLUMN IF NOT EXISTS rejected_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
 
     CREATE TABLE IF NOT EXISTS payments (
       id SERIAL PRIMARY KEY,
@@ -128,7 +135,33 @@ export async function initSchema() {
       key TEXT PRIMARY KEY,
       value JSONB NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS barangays (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
+
+  const { rows } = await query("SELECT COUNT(*)::int AS n FROM barangays");
+  if (rows[0].n === 0) {
+    const defaults = [
+      "Barangay Canipo",
+      "Barangay Taburi",
+      "Barangay Campong-Ulay",
+      "Barangay Iraan",
+      "Barangay Culasian",
+      "Barangay Lao",
+      "Barangay Panalingaan",
+    ];
+    for (const name of defaults) {
+      await query(
+        `INSERT INTO barangays (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
+        [name]
+      );
+    }
+  }
 }
 
 export async function nextCode(prefix, table, column) {
