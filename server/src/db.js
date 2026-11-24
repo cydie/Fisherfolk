@@ -21,9 +21,9 @@ export async function query(text, params) {
   return pool.query(text, params);
 }
 
-export async function waitForDb() {
+export async function waitForDb(maxAttempts = 30) {
   let attempt = 0;
-  while (true) {
+  while (attempt < maxAttempts) {
     attempt += 1;
     try {
       await pool.query("SELECT 1");
@@ -31,13 +31,17 @@ export async function waitForDb() {
       return;
     } catch (err) {
       const detail = err?.message || "connection failed";
-      console.log(`Waiting for PostgreSQL (${attempt}) — ${detail}`);
+      console.log(`Waiting for PostgreSQL (${attempt}/${maxAttempts}) — ${detail}`);
       if (attempt === 1) {
-        console.log("Start it with: docker compose up -d");
+        console.log("Start Docker Desktop, then run: docker compose up -d");
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
+  throw new Error(
+    `PostgreSQL not reachable after ${maxAttempts} attempts. ` +
+      "Start Docker Desktop and run: npm run docker:up"
+  );
 }
 
 export async function initSchema() {

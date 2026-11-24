@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, Card, Col, Row, Spinner, Table } from "react-bootstrap";
+import { Alert, Button, Card, Col, Row, Spinner, Table } from "react-bootstrap";
 import { AlertCircle, Bell, CheckCircle, Clock, Megaphone, Trash2 } from "lucide-react";
 import { api, formatDateTime } from "../api";
 
@@ -18,16 +18,44 @@ const icons: Record<string, typeof Bell> = {
 
 export function Notifications() {
   const [data, setData] = useState<Payload | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    setData(await api<Payload>("/notifications"));
+    setLoading(true);
+    setError("");
+    try {
+      setData(await api<Payload>("/notifications"));
+    } catch (err) {
+      setData(null);
+      setError(err instanceof Error ? err.message : "Failed to load notifications");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => undefined);
+    load();
   }, []);
 
-  if (!data) return <div className="text-center py-5"><Spinner animation="border" /></div>;
+  if (loading && !data) {
+    return (
+      <div className="text-center py-5">
+        <Spinner animation="border" />
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>{error}</span>
+        <Button size="sm" variant="outline-danger" onClick={load}>Retry</Button>
+      </Alert>
+    );
+  }
+
+  if (!data) return null;
 
   return (
     <div>
@@ -53,29 +81,33 @@ export function Notifications() {
           </Button>
         </Card.Header>
         <Card.Body className="p-0">
-          {data.notifications.map((n) => {
-            const Icon = icons[n.type] || Bell;
-            return (
-              <div key={n.id} className={`d-flex gap-3 p-3 border-bottom ${n.is_read ? "" : "bg-primary-subtle"}`}>
-                <div className="rounded p-2 bg-white shadow-sm h-100"><Icon size={20} /></div>
-                <div className="flex-grow-1">
-                  <div className="fw-semibold">{n.title}</div>
-                  <div className="small text-muted">{n.message}</div>
-                  <div className="small text-secondary">{formatDateTime(n.created_at)}</div>
+          {data.notifications.length === 0 ? (
+            <div className="text-center text-muted py-5">No notifications yet</div>
+          ) : (
+            data.notifications.map((n) => {
+              const Icon = icons[n.type] || Bell;
+              return (
+                <div key={n.id} className={`d-flex gap-3 p-3 border-bottom ${n.is_read ? "" : "bg-primary-subtle"}`}>
+                  <div className="rounded p-2 bg-white shadow-sm h-100"><Icon size={20} /></div>
+                  <div className="flex-grow-1">
+                    <div className="fw-semibold">{n.title}</div>
+                    <div className="small text-muted">{n.message}</div>
+                    <div className="small text-secondary">{formatDateTime(n.created_at)}</div>
+                  </div>
+                  <Button
+                    variant="link"
+                    className="text-danger"
+                    onClick={async () => {
+                      await api(`/notifications/${n.id}`, { method: "DELETE" });
+                      load();
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </Button>
                 </div>
-                <Button
-                  variant="link"
-                  className="text-danger"
-                  onClick={async () => {
-                    await api(`/notifications/${n.id}`, { method: "DELETE" });
-                    load();
-                  }}
-                >
-                  <Trash2 size={16} />
-                </Button>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </Card.Body>
       </Card>
       <Card className="stat-card">
@@ -86,6 +118,11 @@ export function Notifications() {
               <tr><th>User</th><th>Action</th><th>Timestamp</th></tr>
             </thead>
             <tbody>
+              {data.activity.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="text-center text-muted py-4">No activity yet</td>
+                </tr>
+              )}
               {data.activity.map((log) => (
                 <tr key={log.id}>
                   <td>{log.user_name}</td>

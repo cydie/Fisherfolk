@@ -419,22 +419,25 @@ router.post(
     if (!permitNumber || !fisherfolkName || !amount || !paymentMethod) {
       return res.status(400).json({ error: "Permit number, name, amount, and method are required" });
     }
+    const normalizedType =
+      permitType === "New Permit" ? "New Application" : permitType || "New Application";
     const permit = await query(
       `SELECT p.id, p.status, f.barangay FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
        WHERE p.permit_number = $1`,
       [permitNumber]
     );
-    if (permit.rows[0]) {
-      const permitStatus = permit.rows[0].status;
-      if (permitStatus === "Rejected") {
-        return res.status(400).json({ error: "Cannot collect payment for a rejected permit application" });
-      }
-      if (!["Approved", "Active", "Released"].includes(permitStatus)) {
-        return res.status(400).json({
-          error: "Permit must be approved by Head Admin before cashier can collect payment",
-        });
-      }
+    if (!permit.rows[0]) {
+      return res.status(404).json({ error: "Permit number not found. Enter an approved permit first." });
+    }
+    const permitStatus = permit.rows[0].status;
+    if (permitStatus === "Rejected") {
+      return res.status(400).json({ error: "Cannot collect payment for a rejected permit application" });
+    }
+    if (!["Approved", "Active", "Released"].includes(permitStatus)) {
+      return res.status(400).json({
+        error: "Permit must be approved by Head Admin before cashier can collect payment",
+      });
     }
     const publicId = await nextCode("PAY", "payments", "public_id");
     const { rows } = await query(
@@ -444,11 +447,11 @@ router.post(
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         publicId,
-        permit.rows[0]?.id || null,
+        permit.rows[0].id,
         permitNumber,
         fisherfolkName,
-        permit.rows[0]?.barangay || null,
-        permitType,
+        permit.rows[0].barangay || null,
+        normalizedType,
         amount,
         paymentMethod,
         orNumber || null,
@@ -625,6 +628,33 @@ router.get(
   asyncH(async (req, res) => {
     await expireOldPermits();
     const barangay = req.query.barangay || "All Barangays";
+    const period = String(req.query.period || "monthly").toLowerCase();
+    const startDate = req.query.start || "";
+    const endDate = req.query.end || "";
+
+    const today = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    let rangeStart = null;
+    let rangeEnd = iso(today);
+    if (period === "daily") {
+      rangeStart = rangeEnd;
+    } else if (period === "weekly") {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 6);
+      rangeStart = iso(start);
+    } else if (period === "monthly") {
+      rangeStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+    } else if (period === "yearly") {
+      rangeStart = `${today.getFullYear()}-01-01`;
+    } else if (period === "custom" && startDate && endDate) {
+      rangeStart = String(startDate);
+      rangeEnd = String(endDate);
+    } else {
+      // all-time (no date bounds)
+      rangeStart = null;
+      rangeEnd = null;
+    }
+
     const params = [];
     const barangayFilter = barangay !== "All Barangays" ? (params.push(barangay), "AND f.barangay = $1") : "";
 
@@ -644,44 +674,74 @@ router.get(
       params
     );
 
+    const listingParams = [];
+    const listingClauses = [];
+    if (barangay !== "All Barangays") {
+      listingParams.push(barangay);
+      listingClauses.push(`f.barangay = $${listingParams.length}`);
+    }
+    if (rangeStart && rangeEnd) {
+      listingParams.push(rangeStart, rangeEnd);
+      listingClauses.push(
+        `COALESCE(p.issue_date, p.created_at::date) BETWEEN $${listingParams.length - 1} AND $${listingParams.length}`
+      );
+    }
+    const listingWhere = listingClauses.length ? `WHERE ${listingClauses.join(" AND ")}` : "";
+
+    const barangayOnlyParams = [];
+    const barangayOnlyWhere =
+      barangay !== "All Barangays"
+        ? (barangayOnlyParams.push(barangay), "WHERE f.barangay = $1")
+        : "";
+
     const byBarangay = await query(
       `SELECT f.barangay AS name, COUNT(*)::int AS value
        FROM permits p JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       GROUP BY f.barangay ORDER BY value DESC`
+       ${listingWhere}
+       GROUP BY f.barangay ORDER BY value DESC`,
+      listingParams
     );
     const boatTypes = await query(
-      `SELECT boat_type AS name, COUNT(*)::int AS permits FROM permits GROUP BY boat_type ORDER BY permits DESC`
+      `SELECT p.boat_type AS name, COUNT(*)::int AS permits
+       FROM permits p JOIN fisherfolk f ON f.id = p.fisherfolk_id
+       ${listingWhere}
+       GROUP BY p.boat_type ORDER BY permits DESC`,
+      listingParams
     );
     const totals = await query(
       `SELECT
-        (SELECT COUNT(*)::int FROM permits) AS total_permits,
-        (SELECT COUNT(*)::int FROM permits WHERE permit_type = 'Renewal') AS total_renewals,
-        (SELECT COALESCE(SUM(amount),0)::float FROM payments WHERE status = 'Fully Paid') AS total_revenue,
-        (SELECT COUNT(*)::int FROM permits
-          WHERE status IN ('Active','Approved','Released')
-            AND expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days') AS expiring
-      `
+        (SELECT COUNT(*)::int FROM permits p JOIN fisherfolk f ON f.id = p.fisherfolk_id ${listingWhere}) AS total_permits,
+        (SELECT COUNT(*)::int FROM permits p JOIN fisherfolk f ON f.id = p.fisherfolk_id
+          ${listingWhere ? listingWhere + " AND" : "WHERE"} p.permit_type = 'Renewal') AS total_renewals,
+        (SELECT COALESCE(SUM(pay.amount),0)::float FROM payments pay
+          WHERE pay.status = 'Fully Paid'
+            ${barangay !== "All Barangays" ? "AND pay.barangay = $1" : ""}
+            ${rangeStart && rangeEnd
+              ? `AND pay.paid_at BETWEEN $${barangay !== "All Barangays" ? 2 : 1} AND $${barangay !== "All Barangays" ? 3 : 2}`
+              : ""}) AS total_revenue,
+        (SELECT COUNT(*)::int FROM permits p JOIN fisherfolk f ON f.id = p.fisherfolk_id
+          ${listingWhere ? listingWhere + " AND" : "WHERE"}
+            p.status IN ('Active','Approved','Released')
+            AND p.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days') AS expiring
+      `,
+      listingParams
     );
-
-    const listingParams = [];
-    const listingFilter =
-      barangay !== "All Barangays" ? (listingParams.push(barangay), "WHERE f.barangay = $1") : "";
 
     const newFisherfolk = await query(
       `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
-              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'New Application'
+       ${listingWhere ? listingWhere + " AND" : "WHERE"} p.permit_type = 'New Application'
        ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
       listingParams
     );
     const renewals = await query(
       `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
-              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'Renewal'
+       ${listingWhere ? listingWhere + " AND" : "WHERE"} p.permit_type = 'Renewal'
        ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
       listingParams
     );
@@ -692,45 +752,56 @@ router.get(
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
        LEFT JOIN boats b ON b.id = p.boat_id
-       ${listingFilter}
+       ${listingWhere}
        ORDER BY f.name ASC, p.boat_type ASC`,
       listingParams
     );
     const replacements = await query(
       `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
-              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date
+              p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       ${listingFilter ? listingFilter + " AND" : "WHERE"} p.permit_type = 'Replacement'
+       ${listingWhere ? listingWhere + " AND" : "WHERE"} p.permit_type = 'Replacement'
        ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
       listingParams
     );
+
+    const payParams = [];
+    const payClauses = [];
+    if (barangay !== "All Barangays") {
+      payParams.push(barangay);
+      payClauses.push(`pay.barangay = $${payParams.length}`);
+    }
+    if (rangeStart && rangeEnd) {
+      payParams.push(rangeStart, rangeEnd);
+      payClauses.push(`pay.paid_at BETWEEN $${payParams.length - 1} AND $${payParams.length}`);
+    }
     const payments = await query(
       `SELECT pay.public_id AS receipt_no, pay.or_number, pay.fisherfolk_name, pay.barangay,
               pay.permit_number, pay.permit_type, pay.amount::float AS amount,
               pay.payment_method, pay.status, pay.paid_at, pay.cashier, pay.reference_number
        FROM payments pay
-       ${barangay !== "All Barangays" ? "WHERE pay.barangay = $1" : ""}
+       ${payClauses.length ? `WHERE ${payClauses.join(" AND ")}` : ""}
        ORDER BY pay.paid_at DESC, pay.id DESC`,
-      barangay !== "All Barangays" ? [barangay] : []
+      payParams
     );
     const expiring = await query(
       `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
               p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       ${listingFilter ? listingFilter + " AND" : "WHERE"}
+       ${barangayOnlyWhere ? barangayOnlyWhere + " AND" : "WHERE"}
          p.status IN ('Active','Approved','Released')
          AND p.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
        ORDER BY p.expiry_date ASC, f.name ASC`,
-      listingParams
+      barangayOnlyParams
     );
     const allPermits = await query(
       `SELECT p.permit_number, f.name AS fisherfolk_name, f.barangay, f.public_id,
               p.boat_type, p.fishing_method, p.status, p.issue_date, p.expiry_date, p.permit_type
        FROM permits p
        JOIN fisherfolk f ON f.id = p.fisherfolk_id
-       ${listingFilter}
+       ${listingWhere}
        ORDER BY COALESCE(p.issue_date, p.created_at::date) DESC, f.name ASC`,
       listingParams
     );
@@ -741,6 +812,7 @@ router.get(
       barangay: byBarangay.rows.map((r, i) => ({ ...r, color: colors[i % colors.length] })),
       boatTypes: boatTypes.rows,
       totals: totals.rows[0],
+      period: { value: period, start: rangeStart, end: rangeEnd },
       listings: {
         newFisherfolk: newFisherfolk.rows,
         renewals: renewals.rows,

@@ -27,6 +27,7 @@ export function Settings() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [settingsError, setSettingsError] = useState("");
 
   async function loadBarangays() {
     setLoadingBarangays(true);
@@ -42,7 +43,9 @@ export function Settings() {
   }
 
   useEffect(() => {
-    api<SettingsMap>("/settings").then(setSettings);
+    api<SettingsMap>("/settings")
+      .then(setSettings)
+      .catch((err) => setSettingsError(err instanceof Error ? err.message : "Failed to load settings"));
     loadBarangays();
   }, []);
 
@@ -114,6 +117,7 @@ export function Settings() {
       <h1 className="h3 mb-1">Settings</h1>
       <p className="text-muted">Manage system configuration and preferences</p>
       {saved && <Alert variant="success">{saved}</Alert>}
+      {settingsError && <Alert variant="danger">{settingsError}</Alert>}
       <Card className="stat-card mb-3">
         <Card.Body>
           <h2 className="h6"><Globe size={18} className="me-2" />System Information</h2>

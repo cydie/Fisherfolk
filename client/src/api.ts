@@ -36,6 +36,14 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
+function networkErrorMessage(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+    return "Cannot reach MFARPS API. Start Docker (npm run docker:up) and the server (npm run dev).";
+  }
+  return msg || "Request failed";
+}
+
 export async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
@@ -44,16 +52,22 @@ export async function api<T = unknown>(path: string, options: RequestInit = {}):
   }
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`/api${path}`, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, { ...options, headers });
+  } catch (err) {
+    throw new Error(networkErrorMessage(err));
+  }
+
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) {
     clearSession();
     if (!window.location.pathname.startsWith("/login")) {
       window.location.href = "/login";
     }
-    throw new Error(data.error || "Sign in required");
+    throw new Error((data as { error?: string }).error || "Sign in required");
   }
-  if (!res.ok) throw new Error(data.error || "Request failed");
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Request failed");
   return data as T;
 }
 

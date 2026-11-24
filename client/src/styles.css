@@ -296,6 +296,20 @@ body {
   }
 }
 
+@media (max-width: 767.98px) {
+  .permit-steps {
+    justify-content: center !important;
+  }
+  .permit-step {
+    flex: 0 0 45%;
+    max-width: 45%;
+  }
+  .step-dot {
+    width: 36px;
+    height: 36px;
+  }
+}
+
 @media print {
   @page {
     size: A4;

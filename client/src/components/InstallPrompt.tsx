@@ -22,9 +22,9 @@ export function InstallPrompt() {
   if (!event || hidden) return null;
 
   return (
-    <Alert variant="info" className="d-flex justify-content-between align-items-center no-print mb-3">
+    <Alert variant="info" className="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 no-print mb-3">
       <span>Install MFARPS on this device for faster access, even with a weak connection.</span>
-      <div className="d-flex gap-2">
+      <div className="d-flex gap-2 flex-shrink-0">
         <Button
           size="sm"
           variant="primary"

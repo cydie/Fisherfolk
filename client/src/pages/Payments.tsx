@@ -43,7 +43,7 @@ export function Payments() {
   const [form, setForm] = useState({
     permitNumber: "",
     fisherfolkName: "",
-    permitType: "New Permit",
+    permitType: "New Application",
     amount: 500,
     paymentMethod: "Cash",
     orNumber: "",
@@ -51,14 +51,24 @@ export function Payments() {
     proofImage: "",
     cashier: user?.name || "",
   });
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const res = await api<PaymentsResponse>(`/payments?search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}`);
-    setData(res);
+    setLoading(true);
+    try {
+      const res = await api<PaymentsResponse>(`/payments?search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}`);
+      setData(res);
+      setError("");
+    } catch (err) {
+      setData(null);
+      setError(err instanceof Error ? err.message : "Failed to load payments");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((err) => setError(err.message));
+    load();
   }, [search, status]);
 
   useEffect(() => {
@@ -67,7 +77,20 @@ export function Payments() {
     }).catch(() => undefined);
   }, []);
 
-  if (!data) return <div className="text-center py-5">{error || <Spinner animation="border" />}</div>;
+  if (loading && !data) {
+    return <div className="text-center py-5"><Spinner animation="border" /></div>;
+  }
+
+  if (error && !data) {
+    return (
+      <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>{error}</span>
+        <Button size="sm" variant="outline-danger" onClick={load}>Retry</Button>
+      </Alert>
+    );
+  }
+
+  if (!data) return null;
 
   return (
     <div>
@@ -117,6 +140,11 @@ export function Payments() {
               </tr>
             </thead>
             <tbody>
+              {data.records.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="text-center text-muted py-4">No payment records found</td>
+                </tr>
+              )}
               {data.records.map((r) => (
                 <tr key={r.id}>
                   <td>{r.public_id}</td>
@@ -160,7 +188,7 @@ export function Payments() {
                   setForm({ ...form, permitType: type, amount });
                 }}
               >
-                <option>New Permit</option>
+                <option>New Application</option>
                 <option>Renewal</option>
                 <option>Replacement</option>
               </Form.Select>

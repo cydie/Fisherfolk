@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Form, Row, Table } from "react-bootstrap";
+import { Alert, Button, Card, Col, Form, Row, Spinner, Table } from "react-bootstrap";
 import { Calendar, Download, FileText, Printer } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, formatDate, peso } from "../api";
@@ -206,21 +206,47 @@ function PaymentListingTable({ title, rows }: { title: string; rows: ListingRow[
 }
 
 export function Reports() {
-  const [selectedReport, setSelectedReport] = useState("monthly");
+  const [selectedReport, setSelectedReport] = useState("all");
   const [reportCategory, setReportCategory] = useState<ReportCategory>("summary");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [barangay, setBarangay] = useState("All Barangays");
   const [barangays, setBarangays] = useState<string[]>([]);
   const [data, setData] = useState<ReportData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     api<Lookups>("/lookups").then((l) => setBarangays(l.barangays)).catch(() => setBarangays([]));
   }, []);
 
+  function loadReports() {
+    if (selectedReport === "custom" && (!startDate || !endDate)) {
+      setError("Choose both start and end dates for a custom range.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    const qs = new URLSearchParams({
+      barangay,
+      period: selectedReport,
+    });
+    if (selectedReport === "custom") {
+      qs.set("start", startDate);
+      qs.set("end", endDate);
+    }
+    api<ReportData>(`/reports?${qs.toString()}`)
+      .then(setData)
+      .catch((err) => {
+        setData(null);
+        setError(err instanceof Error ? err.message : "Failed to load reports");
+      })
+      .finally(() => setLoading(false));
+  }
+
   useEffect(() => {
-    api<ReportData>(`/reports?barangay=${encodeURIComponent(barangay)}`).then(setData).catch(() => setData(null));
-  }, [barangay]);
+    loadReports();
+  }, [barangay, selectedReport, startDate, endDate]);
 
   const categoryMeta = useMemo(
     () => REPORT_CATEGORIES.find((c) => c.value === reportCategory) || REPORT_CATEGORIES[0],
@@ -283,31 +309,33 @@ export function Reports() {
     URL.revokeObjectURL(url);
   }
 
-  if (!data) return <div className="text-muted">Loading reports...</div>;
-
   const periodLabel =
     selectedReport === "custom" && startDate && endDate
       ? `Custom Range: ${startDate} to ${endDate}`
-      : `${selectedReport.charAt(0).toUpperCase()}${selectedReport.slice(1)} Period`;
+      : selectedReport === "all"
+        ? "All Time"
+        : `${selectedReport.charAt(0).toUpperCase()}${selectedReport.slice(1)} Period`;
   const generatedOn = new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
   const showCharts = reportCategory === "summary";
 
   return (
     <div>
-      <div className="report-print-header">
-        <article className="official-doc">
-          <div className="official-doc-inner">
-            <OfficialDocHeader
-              title={categoryMeta.paperTitle}
-              subtitle={`${periodLabel} · ${barangay} · Generated ${generatedOn}`}
-              logoSize={80}
-            />
-            <p className="small text-center mb-0" style={{ color: "#475569" }}>
-              Official MFARPS report focused on: {categoryMeta.label}
-            </p>
-          </div>
-        </article>
-      </div>
+      {data && (
+        <div className="report-print-header">
+          <article className="official-doc">
+            <div className="official-doc-inner">
+              <OfficialDocHeader
+                title={categoryMeta.paperTitle}
+                subtitle={`${periodLabel} · ${barangay} · Generated ${generatedOn}`}
+                logoSize={80}
+              />
+              <p className="small text-center mb-0" style={{ color: "#475569" }}>
+                Official MFARPS report focused on: {categoryMeta.label}
+              </p>
+            </div>
+          </article>
+        </div>
+      )}
 
       <div className="no-print">
         <h1 className="h3 mb-1">Reports & Analytics</h1>
@@ -331,6 +359,7 @@ export function Reports() {
             <Col md={3}>
               <Form.Label>Period</Form.Label>
               <Form.Select value={selectedReport} onChange={(e) => setSelectedReport(e.target.value)}>
+                <option value="all">All Time</option>
                 <option value="daily">Daily Report</option>
                 <option value="weekly">Weekly Report</option>
                 <option value="monthly">Monthly Report</option>
@@ -360,13 +389,35 @@ export function Reports() {
               </Form.Select>
             </Col>
           </Row>
-          <div className="d-flex gap-2 mt-3">
-            <Button variant="danger" onClick={() => window.print()}><Download size={16} className="me-1" /> Export as PDF</Button>
-            <Button variant="success" onClick={exportCsv}><Download size={16} className="me-1" /> Export as Excel</Button>
-            <Button onClick={() => window.print()}><Printer size={16} className="me-1" /> Print Report</Button>
+          <div className="d-flex flex-wrap gap-2 mt-3">
+            <Button variant="danger" disabled={!data} onClick={() => window.print()}><Download size={16} className="me-1" /> Export as PDF</Button>
+            <Button variant="success" disabled={!data} onClick={exportCsv}><Download size={16} className="me-1" /> Export as CSV</Button>
+            <Button disabled={!data} onClick={() => window.print()}><Printer size={16} className="me-1" /> Print Report</Button>
+            <Button variant="outline-secondary" onClick={loadReports}>Refresh</Button>
           </div>
         </Card.Body>
       </Card>
+
+      {error && (
+        <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2 no-print">
+          <span>{error}</span>
+          <Button size="sm" variant="outline-danger" onClick={loadReports}>Retry</Button>
+        </Alert>
+      )}
+
+      {loading && !data && (
+        <div className="text-center py-5 text-muted no-print">
+          <Spinner animation="border" className="mb-2" />
+          <div>Loading reports...</div>
+        </div>
+      )}
+
+      {!loading && !data && !error && (
+        <div className="text-muted no-print">No report data available.</div>
+      )}
+
+      {data && (
+        <>
 
       {showCharts && (
         <>
@@ -499,6 +550,8 @@ export function Reports() {
           </footer>
         </Card.Body>
       </Card>
+        </>
+      )}
     </div>
   );
 }

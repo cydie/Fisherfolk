@@ -8,9 +8,10 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["logo.svg", "offline.html", "icon-192.png", "icon-512.png"],
+      // Keep SW off in Vite dev — NetworkFirst /api caching causes "Failed to fetch"
+      // when the API is restarting or Docker DB is down.
       devOptions: {
-        enabled: true,
-        type: "module",
+        enabled: false,
       },
       manifest: {
         name: "MFARPS — Municipal Fisherfolk & Boat Permit System",
@@ -35,10 +36,9 @@ export default defineConfig({
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
-            handler: "NetworkFirst",
+            handler: "NetworkOnly",
             options: {
               cacheName: "mfarps-api",
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 5 },
             },
           },
         ],
@@ -48,7 +48,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:4001",
+      "/api": "http://localhost:4002",
     },
   },
 });

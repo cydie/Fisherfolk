@@ -65,6 +65,7 @@ export function Records() {
   const [rejectReason, setRejectReason] = useState("");
   const [rejectDetail, setRejectDetail] = useState<Permit | null>(null);
   const [actionError, setActionError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     api<{ barangays: string[] }>("/lookups")
@@ -74,26 +75,32 @@ export function Records() {
 
   async function load() {
     setLoading(true);
-    const q = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=${encodeURIComponent(status)}&boatType=${encodeURIComponent(boatType)}`;
-    const rejectedQ = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=Rejected`;
-    const requests: Promise<unknown>[] = [
-      api<Fisherfolk[]>(`/fisherfolk?${q}`),
-      api<Permit[]>(`/permits?${q}`),
-      api<Fisherfolk[]>(`/fisherfolk?archived=true&search=${encodeURIComponent(search)}`),
-    ];
-    if (canRejected) {
-      requests.push(api<Permit[]>(`/permits?${rejectedQ}`));
+    setLoadError("");
+    try {
+      const q = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=${encodeURIComponent(status)}&boatType=${encodeURIComponent(boatType)}`;
+      const rejectedQ = `search=${encodeURIComponent(search)}&barangay=${encodeURIComponent(barangay)}&status=Rejected`;
+      const requests: Promise<unknown>[] = [
+        api<Fisherfolk[]>(`/fisherfolk?${q}`),
+        api<Permit[]>(`/permits?${q}`),
+        api<Fisherfolk[]>(`/fisherfolk?archived=true&search=${encodeURIComponent(search)}`),
+      ];
+      if (canRejected) {
+        requests.push(api<Permit[]>(`/permits?${rejectedQ}`));
+      }
+      const results = await Promise.all(requests);
+      setPeople(results[0] as Fisherfolk[]);
+      setPermits(results[1] as Permit[]);
+      setArchived(results[2] as Fisherfolk[]);
+      setRejected(canRejected ? (results[3] as Permit[]) : []);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Failed to load records");
+    } finally {
+      setLoading(false);
     }
-    const results = await Promise.all(requests);
-    setPeople(results[0] as Fisherfolk[]);
-    setPermits(results[1] as Permit[]);
-    setArchived(results[2] as Fisherfolk[]);
-    setRejected(canRejected ? (results[3] as Permit[]) : []);
-    setLoading(false);
   }
 
   useEffect(() => {
-    load().catch(() => setLoading(false));
+    load();
   }, [search, barangay, status, boatType, canRejected]);
 
   const rows = tab === "fisherfolk" ? people : tab === "archived" ? archived : [];
@@ -154,6 +161,12 @@ export function Records() {
           : "View-only access — look up approved permits for payment processing"}
       </p>
       {actionError && <Alert variant="danger">{actionError}</Alert>}
+      {loadError && (
+        <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span>{loadError}</span>
+          <Button size="sm" variant="outline-danger" onClick={load}>Retry</Button>
+        </Alert>
+      )}
       <Card className="stat-card">
         <Card.Header className="bg-white">
           <Nav variant="pills">
@@ -262,49 +275,56 @@ export function Records() {
               </Table>
             )
           ) : tab === "permits" ? (
-            <Table responsive hover>
-              <thead>
-                <tr>
-                  <th>Permit Number</th>
-                  <th>Type</th>
-                  <th>Owner Name</th>
-                  <th>Barangay</th>
-                  <th>Boat Type</th>
-                  <th>Issue Date</th>
-                  <th>Expiry Date</th>
-                  <th>Status</th>
-                  {canStatus && <th>Workflow</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {(paged as Permit[]).map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.permit_number}</td>
-                    <td>{p.permit_type}</td>
-                    <td>{p.owner_name}</td>
-                    <td>{p.barangay}</td>
-                    <td>{p.boat_type}</td>
-                    <td>{formatDate(p.issue_date)}</td>
-                    <td>{formatDate(p.expiry_date)}</td>
-                    <td><StatusBadge value={p.status} /></td>
-                    {canStatus && (
-                      <td style={{ minWidth: 150 }}>
-                        <Form.Select
-                          size="sm"
-                          value={p.status}
-                          onChange={(e) => onWorkflowChange(p, e.target.value)}
-                        >
-                          {!statusOptions.includes(p.status) && <option value={p.status}>{p.status}</option>}
-                          {statusOptions.map((s) => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </Form.Select>
-                      </td>
-                    )}
+            permits.length === 0 ? (
+              <div className="text-center text-muted py-5">
+                <Archive className="mb-2" />
+                <div>No permit records found</div>
+              </div>
+            ) : (
+              <Table responsive hover>
+                <thead>
+                  <tr>
+                    <th>Permit Number</th>
+                    <th>Type</th>
+                    <th>Owner Name</th>
+                    <th>Barangay</th>
+                    <th>Boat Type</th>
+                    <th>Issue Date</th>
+                    <th>Expiry Date</th>
+                    <th>Status</th>
+                    {canStatus && <th>Workflow</th>}
                   </tr>
-                ))}
-              </tbody>
-            </Table>
+                </thead>
+                <tbody>
+                  {(paged as Permit[]).map((p) => (
+                    <tr key={p.id}>
+                      <td>{p.permit_number}</td>
+                      <td>{p.permit_type}</td>
+                      <td>{p.owner_name}</td>
+                      <td>{p.barangay}</td>
+                      <td>{p.boat_type}</td>
+                      <td>{formatDate(p.issue_date)}</td>
+                      <td>{formatDate(p.expiry_date)}</td>
+                      <td><StatusBadge value={p.status} /></td>
+                      {canStatus && (
+                        <td style={{ minWidth: 150 }}>
+                          <Form.Select
+                            size="sm"
+                            value={p.status}
+                            onChange={(e) => onWorkflowChange(p, e.target.value)}
+                          >
+                            {!statusOptions.includes(p.status) && <option value={p.status}>{p.status}</option>}
+                            {statusOptions.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </Form.Select>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )
           ) : rows.length === 0 ? (
             <div className="text-center text-muted py-5">
               <Archive className="mb-2" />

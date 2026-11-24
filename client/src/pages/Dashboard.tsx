@@ -31,21 +31,43 @@ export function Dashboard() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const roleInfo = user ? ROLE_FUNCTION[user.role] : null;
 
-  useEffect(() => {
+  function load() {
+    setLoading(true);
+    setError("");
     api<DashboardData>("/dashboard")
       .then(setData)
-      .catch((err) => setError(err.message));
+      .catch((err) => {
+        setData(null);
+        setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      })
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
-  if (!data) {
+  if (loading && !data) {
     return (
       <div className="text-center py-5">
-        {error || <Spinner animation="border" />}
+        <Spinner animation="border" />
       </div>
     );
   }
+
+  if (error && !data) {
+    return (
+      <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>{error}</span>
+        <Button size="sm" variant="outline-danger" onClick={load}>Retry</Button>
+      </Alert>
+    );
+  }
+
+  if (!data) return null;
 
   const cards = [
     { title: "Total Registered Fisherfolk", value: data.stats.fisherfolk, icon: Users, color: "#2563eb" },
@@ -169,6 +191,11 @@ export function Dashboard() {
               </tr>
             </thead>
             <tbody>
+              {data.recent.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-center text-muted py-4">No recent transactions yet</td>
+                </tr>
+              )}
               {data.recent.map((row) => (
                 <tr key={row.id}>
                   <td>{row.id}</td>

@@ -46,6 +46,7 @@ export function RenewPermit() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<Permit | null>(null);
+  const [bootError, setBootError] = useState("");
   const [form, setForm] = useState({
     fisherfolkId: "" as number | "",
     fisherfolkName: "",
@@ -56,9 +57,21 @@ export function RenewPermit() {
     permitType: "New Application",
   });
 
+  function loadBoot() {
+    setBootError("");
+    Promise.all([api<Lookups>("/lookups"), api<Fisherfolk[]>("/fisherfolk")])
+      .then(([l, p]) => {
+        setLookups(l);
+        setPeople(p);
+      })
+      .catch((err) => {
+        setLookups(null);
+        setBootError(err instanceof Error ? err.message : "Failed to load form data");
+      });
+  }
+
   useEffect(() => {
-    api<Lookups>("/lookups").then(setLookups);
-    api<Fisherfolk[]>("/fisherfolk").then(setPeople);
+    loadBoot();
   }, []);
 
   const filtered = useMemo(
@@ -103,6 +116,32 @@ export function RenewPermit() {
     }
   }
 
+  function validateStep(current: number) {
+    if (current === 1) {
+      if (!form.fisherfolkName.trim() || !form.barangay || !form.contact.trim()) {
+        setError("Full name, barangay, and contact number are required.");
+        return false;
+      }
+    }
+    if (current === 2) {
+      if (!form.boatType || !form.fishingMethod) {
+        setError("Boat type and fishing method are required.");
+        return false;
+      }
+    }
+    setError("");
+    return true;
+  }
+
+  if (bootError && !lookups) {
+    return (
+      <Alert variant="danger" className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>{bootError}</span>
+        <Button size="sm" variant="outline-danger" onClick={loadBoot}>Retry</Button>
+      </Alert>
+    );
+  }
+
   if (!lookups) return <div className="text-center py-5"><Spinner animation="border" /></div>;
 
   return (
@@ -110,20 +149,20 @@ export function RenewPermit() {
       <h1 className="h3 mb-1">Renew / Permit Application</h1>
       <p className="text-muted">Create a new permit or renew an existing one</p>
       <Card className="stat-card mb-3">
-        <Card.Body className="d-flex justify-content-between align-items-center">
+        <Card.Body className="permit-steps d-flex justify-content-between align-items-center flex-wrap gap-2">
           {steps.map((s, index) => {
             const Icon = s.icon;
             const active = step === s.number;
             const done = step > s.number;
             return (
-              <div key={s.number} className="d-flex align-items-center flex-grow-1">
+              <div key={s.number} className="d-flex align-items-center flex-grow-1 permit-step">
                 <div className="text-center flex-grow-1">
                   <div className={`step-dot mx-auto text-white ${active ? "bg-primary" : done ? "bg-success" : "bg-secondary"}`}>
                     <Icon size={18} />
                   </div>
                   <div className={`small mt-2 ${active ? "text-primary fw-semibold" : "text-muted"}`}>{s.title}</div>
                 </div>
-                {index < steps.length - 1 && <div className={`flex-grow-1 ${step > s.number ? "bg-success" : "bg-light"}`} style={{ height: 4 }} />}
+                {index < steps.length - 1 && <div className={`flex-grow-1 d-none d-md-block ${step > s.number ? "bg-success" : "bg-light"}`} style={{ height: 4 }} />}
               </div>
             );
           })}
@@ -226,7 +265,7 @@ export function RenewPermit() {
               <h2 className="h5">Upload Required Documents</h2>
               <label className="border border-2 border-dashed rounded-3 p-5 text-center d-block" htmlFor="docs">
                 <Upload className="mb-2" />
-                <div>Click to attach supporting files. Names are stored with the application.</div>
+                <div>Click to attach supporting files. File names are recorded with the application (upload is local reference only).</div>
               </label>
               <input
                 id="docs"
@@ -274,9 +313,28 @@ export function RenewPermit() {
           <div className="d-flex justify-content-between mt-4 pt-3 border-top">
             <Button variant="outline-secondary" disabled={step === 1} onClick={() => setStep(step - 1)}>Previous</Button>
             {step < 4 ? (
-              <Button onClick={() => setStep(step + 1)}>Next</Button>
+              <Button
+                onClick={() => {
+                  if (!validateStep(step)) return;
+                  setStep(step + 1);
+                }}
+              >
+                Next
+              </Button>
             ) : (
-              <Button variant="success" disabled={saving} onClick={submit}>{saving ? "Submitting..." : "Submit Application"}</Button>
+              <Button
+                variant="success"
+                disabled={saving}
+                onClick={() => {
+                  if (!validateStep(1) || !validateStep(2)) {
+                    setStep(!form.fisherfolkName || !form.barangay || !form.contact ? 1 : 2);
+                    return;
+                  }
+                  submit();
+                }}
+              >
+                {saving ? "Submitting..." : "Submit Application"}
+              </Button>
             )}
           </div>
         </Card.Body>

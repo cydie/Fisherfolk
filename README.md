@@ -24,7 +24,7 @@ npm run dev
 
 Then open **http://localhost:5173**
 
-- API: http://localhost:4001/api/health
+- API: http://localhost:4002/api/health
 - Database: `127.0.0.1:5437` (user `fisherfolk` / password `fisherfolk` / database `mfarps`)
 
 To install it as an app, open the site in Chrome or Edge and use **Install app** (or the in-page prompt).

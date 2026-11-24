@@ -24,13 +24,22 @@ export function VerifyPermit() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setError("");
+    setPermit(null);
     fetch(`/api/public/permits/${number}`)
       .then(async (res) => {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || "Not found");
         setPermit(data);
       })
-      .catch((err) => setError(err.message));
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Request failed";
+        setError(
+          /failed to fetch|networkerror|load failed/i.test(msg)
+            ? "Cannot reach MFARPS API. Make sure the server is running."
+            : msg
+        );
+      });
   }, [number]);
 
   return (

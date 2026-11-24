@@ -9,16 +9,25 @@ export function UserManagement() {
   const [search, setSearch] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [resetId, setResetId] = useState<number | null>(null);
   const [edit, setEdit] = useState<AppUser | null>(null);
   const [form, setForm] = useState({ name: "", email: "", role: "Staff", password: "" });
 
   async function load() {
-    setUsers(await api<AppUser[]>(`/users?search=${encodeURIComponent(search)}`));
+    setLoading(true);
+    try {
+      setUsers(await api<AppUser[]>(`/users?search=${encodeURIComponent(search)}`));
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load users");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((err) => setError(err.message));
+    load();
   }, [search]);
 
   const active = users.filter((u) => u.status === "Active").length;
@@ -45,8 +54,10 @@ export function UserManagement() {
             <Search size={16} className="position-absolute top-50 translate-middle-y ms-3 text-muted" />
             <Form.Control className="ps-5" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search users by name or email..." />
           </div>
-          {users.length === 0 ? (
+          {loading ? (
             <div className="text-center py-4"><Spinner animation="border" /></div>
+          ) : users.length === 0 ? (
+            <div className="text-center text-muted py-4">No users found</div>
           ) : (
             <Table responsive hover>
               <thead>
